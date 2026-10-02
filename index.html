@@ -335,7 +335,10 @@ function buildDates(){
   }
 }
 
-$('dateSel').addEventListener('change', render);
+$('dateSel').addEventListener('change', ()=>{
+  if(dirty) doSave(true);      // huwag iwanang nakabinbin ang naunang petsa
+  render();
+});
 
 const MARKS = [['', 'P', 'p'], ['A', 'A', 'a'], ['L', 'L', 'l'], ['M', 'M', 'm']];
 
@@ -388,6 +391,7 @@ function render(){
       dirty = true;
       render();
       updateSave();
+      scheduleAutosave();
     });
   });
   updateCounts(key);
@@ -404,13 +408,29 @@ function updateCounts(key){
 }
 
 function updateSave(){
-  $('btnSave').disabled = !dirty;
-  $('saveStatus').textContent = dirty ? 'May hindi pa na-save' : 'Na-save na';
+  $('btnSave').disabled = !dirty || saving;
+  if(!dirty && !saving) $('saveStatus').textContent = 'Na-save na';
 }
 
-$('btnSave').addEventListener('click', async ()=>{
-  const btn = $('btnSave');
-  btn.disabled = true; $('saveStatus').textContent = 'Sine-save...';
+/* Awtomatikong nagse-save pagkaraan ng ilang segundo mula sa huling
+   pindot, para hindi na kailangang tandaan ang Save button. Nananatili
+   pa rin ang button para sa sinumang gustong mag-save agad. */
+let saveTimer = null, saving = false, pendingSave = false;
+const AUTOSAVE_DELAY = 2500;
+
+function scheduleAutosave(){
+  clearTimeout(saveTimer);
+  $('saveStatus').textContent = 'Awtomatikong sine-save...';
+  saveTimer = setTimeout(()=> doSave(true), AUTOSAVE_DELAY);
+}
+
+async function doSave(isAuto){
+  clearTimeout(saveTimer);
+  if(!dirty || !classRef) return;
+  if(saving){ pendingSave = true; return; }   // may tumatakbo pa — pilahin
+  saving = true;
+  $('btnSave').disabled = true;
+  $('saveStatus').textContent = isAuto ? 'Awtomatikong sine-save...' : 'Sine-save...';
   try{
     const key = $('dateSel').value;
     const count = Object.keys(working[key] || {}).length;
@@ -424,15 +444,28 @@ $('btnSave').addEventListener('click', async ()=>{
     });
     classData.log = log;
     dirty = false;
-    updateSave();
-    $('saveStatus').textContent = 'Na-save na — nakikita na ito ng adviser.';
+    const t = new Date().toLocaleTimeString('en-PH', { hour:'numeric', minute:'2-digit' });
+    $('saveStatus').textContent = `Na-save ${t} — nakikita na ito ng adviser.`;
   }catch(e){
     console.error(e);
     dirty = true;
-    $('saveStatus').textContent = 'Hindi na-save. Subukang muli.';
-    btn.disabled = false;
+    $('saveStatus').textContent = 'Hindi na-save. Susubukan ulit...';
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(()=> doSave(true), 6000);   // subukan ulit mamaya
+  }finally{
+    saving = false;
+    $('btnSave').disabled = !dirty;
+    if(pendingSave){ pendingSave = false; scheduleAutosave(); }
   }
+}
+
+$('btnSave').addEventListener('click', ()=> doSave(false));
+
+/* Kapag isinara ang tab o nawalan ng tingin, i-save agad ang nakabinbin. */
+document.addEventListener('visibilitychange', ()=>{
+  if(document.visibilityState === 'hidden' && dirty) doSave(true);
 });
+window.addEventListener('pagehide', ()=>{ if(dirty) doSave(true); });
 
 window.addEventListener('beforeunload', (e)=>{
   if(dirty){ e.preventDefault(); e.returnValue = ''; }
