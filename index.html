@@ -178,6 +178,15 @@
     <div class="datebar">
       <div class="lab">Petsa</div>
       <select id="dateSel"></select>
+      <div id="periodWrap" style="display:none; margin-top:10px;">
+        <div class="lab">Period</div>
+        <select id="periodSel"></select>
+        <div style="font-size:10.5px; color:var(--ink-soft); margin-top:4px; line-height:1.6;">
+          Markahan kada period. Sa sistema ng adviser, isang marka lang kada araw:
+          kahit isang period na absent ay <strong>absent</strong> buong araw; kung walang absent
+          pero may late, <strong>late</strong>.
+        </div>
+      </div>
     </div>
     <div id="dayNotice"></div>
     <div class="counts">
@@ -218,6 +227,21 @@ let mode = 'login';
 let classRef = null, classData = null, dirty = false;
 let working = {};          // { dateKey: { studentId: mark } }
 let workingEx = {};        // { dateKey: { studentId: {proof, reason} } }
+let workingPd = {};        // { dateKey: { studentId: { periodIndex: mark } } }
+let PERIODS = [];          // pangalan ng bawat period, galing sa adviser
+let curPeriod = 0;
+
+/* Isang marka kada araw mula sa maraming period.
+   Absent > Late > Excused > Present — kahit isang period lang
+   ang absent, absent na ang buong araw ayon sa SF2. */
+function rollUp(obj){
+  const vals = Object.values(obj || {}).filter(Boolean);
+  if(!vals.length) return '';
+  if(vals.includes('A')) return 'A';
+  if(vals.includes('L')) return 'L';
+  if(vals.includes('E')) return 'E';
+  return '';
+}
 
 /* Mga uri ng patunay. Pinapalitan ito ng listahang ipinapadala ng
    adviser, para iisa ang pinagmumulan at hindi magkaiba. */
@@ -326,6 +350,9 @@ async function loadClass(user){
     classData = snap.docs[0].data();
     working = JSON.parse(JSON.stringify(classData.marks || {}));
     workingEx = JSON.parse(JSON.stringify(classData.excuses || {}));
+    workingPd = JSON.parse(JSON.stringify(classData.periods || {}));
+    PERIODS = Array.isArray(classData.periodLabels) ? classData.periodLabels : [];
+    curPeriod = 0;
     if(Array.isArray(classData.proofOptions) && classData.proofOptions.length){
       PROOFS = classData.proofOptions;
     }
@@ -333,6 +360,7 @@ async function loadClass(user){
       .filter(Boolean).join(' — ') || 'Klase';
     $('clsSub').textContent = [classData.schoolName, classData.schoolYear].filter(Boolean).join(' · ');
     buildDates();
+    fillPeriods();
     render();
   }catch(e){
     console.error(e);
@@ -344,6 +372,19 @@ async function loadClass(user){
 
 const pad = n => String(n).padStart(2,'0');
 const keyOf = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+
+function fillPeriods(){
+  const wrap = $('periodWrap');
+  if(!PERIODS.length){ wrap.style.display = 'none'; return; }
+  wrap.style.display = 'block';
+  const sel = $('periodSel');
+  sel.innerHTML = PERIODS.map((p,i)=>`<option value="${i}">${p}</option>`).join('');
+  sel.value = String(curPeriod);
+  if(!sel.dataset.bound){
+    sel.dataset.bound = '1';
+    sel.addEventListener('change', ()=>{ curPeriod = parseInt(sel.value) || 0; render(); });
+  }
+}
 
 function buildDates(){
   const back = classData.backdays === undefined ? 3 : classData.backdays;
@@ -380,6 +421,13 @@ function render(){
   const list = $('list');
 
   const dayMarks = working[key] || {};
+  const usePeriods = PERIODS.length > 0;
+  const pdDay = workingPd[key] || {};
+  /* Kapag per-period, ang ipinapakita ay ang marka sa napiling period —
+     hindi ang pinagsamang marka ng buong araw. */
+  const markOf = sid => usePeriods
+    ? (((pdDay[sid] || {})[curPeriod]) || '')
+    : (dayMarks[sid] || '');
   const anyExcused = Object.values(dayMarks).includes('E');
   $('dayNotice').innerHTML = holidays.includes(key)
     ? '<div class="notice">Nakatala ang araw na ito bilang <strong>No Class</strong>. '
@@ -406,7 +454,7 @@ function render(){
     html += `<div class="grp">${label} (${active.length})</div>`;
     active.forEach((r, i)=>{
       shown++;
-      const cur = dayMarks[r.id] || '';
+      const cur = markOf(r.id);
       const btns = MARKS.map(([val, ch, cls])=>
         `<button data-sid="${r.id}" data-val="${val}" class="${cur === val ? 'on ' + cls : ''}">${ch}</button>`).join('');
       const isEx = cur === 'E';
@@ -455,9 +503,20 @@ function render(){
   list.querySelectorAll('[data-sid]').forEach(b=>{
     b.addEventListener('click', ()=>{
       const sid = b.dataset.sid, val = b.dataset.val;
-      if(!working[key]) working[key] = {};
-      if(val === '') delete working[key][sid];
-      else working[key][sid] = val;
+      if(usePeriods){
+        if(!workingPd[key]) workingPd[key] = {};
+        if(!workingPd[key][sid]) workingPd[key][sid] = {};
+        if(val === '') delete workingPd[key][sid][curPeriod];
+        else workingPd[key][sid][curPeriod] = val;
+        /* Ang marka ng araw ay laging hango sa mga period. */
+        if(!working[key]) working[key] = {};
+        const rolled = rollUp(workingPd[key][sid]);
+        if(rolled) working[key][sid] = rolled; else delete working[key][sid];
+      } else {
+        if(!working[key]) working[key] = {};
+        if(val === '') delete working[key][sid];
+        else working[key][sid] = val;
+      }
       dirty = true;
       render();
       updateSave();
@@ -471,8 +530,10 @@ function updateCounts(key){
   const roster = classData.roster || [];
   const dm = working[key] || {};
   let a = 0, l = 0, e = 0;
+  const usePeriods = PERIODS.length > 0;
+  const pdDay = workingPd[key] || {};
   roster.forEach(r=>{
-    const v = dm[r.id];
+    const v = usePeriods ? (((pdDay[r.id] || {})[curPeriod]) || '') : dm[r.id];
     if(v === 'A') a++; else if(v === 'L') l++; else if(v === 'E') e++;
   });
   $('cA').textContent = a;
@@ -513,6 +574,7 @@ async function doSave(isAuto){
     await classRef.update({
       marks: working,
       excuses: workingEx,
+      periods: workingPd,
       log: log,
       updatedAt: Date.now(),
       updatedBy: 'secretary'
