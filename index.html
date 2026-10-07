@@ -71,7 +71,8 @@
   .cnt{ flex:1; background:var(--paper-card); border:1px solid var(--line); border-radius:var(--radius); padding:9px 6px; text-align:center; }
   .cnt b{ display:block; font-size:19px; }
   .cnt span{ font-size:9.5px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-soft); }
-  .cnt.p b{ color:var(--ok); } .cnt.a b{ color:var(--danger); } .cnt.l b{ color:var(--late); }
+  .cnt.p b{ color:var(--ok); } .cnt.a b{ color:var(--danger); }
+  .cnt.l b{ color:var(--late); } .cnt.e b{ color:var(--male); }
 
   .grp{ font-size:10.5px; text-transform:uppercase; letter-spacing:.07em; color:var(--ink-soft); font-weight:700; margin:14px 0 6px; }
   .row{
@@ -90,6 +91,16 @@
   .seg button.on.a{ background:var(--danger); border-color:var(--danger); color:#fff; }
   .seg button.on.l{ background:var(--late); border-color:var(--late); color:#fff; }
   .seg button.on.m{ background:var(--male); border-color:var(--male); color:#fff; }
+  .notice.hint{ background:#e9f1f7; border-color:#c7dcf3; color:var(--male); }
+  .exrow{
+    background:#eef4fa; border:1px solid #c7dcf3; border-top:0;
+    border-radius:0 0 var(--radius) var(--radius);
+    margin:-7px 0 6px; padding:9px 11px;
+  }
+  .exrow .lab{ font-size:9.5px; text-transform:uppercase; letter-spacing:.06em; color:var(--male); font-weight:700; }
+  .exrow select, .exrow input{ margin-top:4px; font-size:13px; padding:7px 9px; }
+  .exrow .warn{ font-size:10.5px; margin-top:4px; }
+  .row.hasex{ border-radius:var(--radius) var(--radius) 0 0; margin-bottom:0; }
 
   .savebar{
     position:fixed; left:0; right:0; bottom:0; z-index:30;
@@ -173,6 +184,7 @@
       <div class="cnt p"><b id="cP">0</b><span>Present</span></div>
       <div class="cnt a"><b id="cA">0</b><span>Absent</span></div>
       <div class="cnt l"><b id="cL">0</b><span>Late</span></div>
+      <div class="cnt e"><b id="cE">0</b><span>Excused</span></div>
     </div>
     <div id="list"></div>
     <button class="signout" id="btnSignout">Mag-sign out</button>
@@ -205,6 +217,18 @@ const $ = id => document.getElementById(id);
 let mode = 'login';
 let classRef = null, classData = null, dirty = false;
 let working = {};          // { dateKey: { studentId: mark } }
+let workingEx = {};        // { dateKey: { studentId: {proof, reason} } }
+
+/* Mga uri ng patunay. Pinapalitan ito ng listahang ipinapadala ng
+   adviser, para iisa ang pinagmumulan at hindi magkaiba. */
+let PROOFS = [
+  { k:'letter',  label:'Sulat ng magulang (pirmado)', valid:true },
+  { k:'medical', label:'Medical certificate',          valid:true },
+  { k:'school',  label:'School-related',               valid:true },
+  { k:'chat',    label:'Chat o text ng magulang',      valid:false },
+  { k:'verbal',  label:'Sinabi lang nang pasalita',    valid:false },
+  { k:'none',    label:'Wala pang patunay',            valid:false }
+];
 
 /* ---------- auth ---------- */
 function say(t, k){ const m = $('authMsg'); m.textContent = t; m.className = 'msg ' + (k || 'info'); if(!t) m.className = 'msg'; }
@@ -301,6 +325,10 @@ async function loadClass(user){
     classRef = snap.docs[0].ref;
     classData = snap.docs[0].data();
     working = JSON.parse(JSON.stringify(classData.marks || {}));
+    workingEx = JSON.parse(JSON.stringify(classData.excuses || {}));
+    if(Array.isArray(classData.proofOptions) && classData.proofOptions.length){
+      PROOFS = classData.proofOptions;
+    }
     $('clsName').textContent = [classData.gradeLevel && ('Grade ' + classData.gradeLevel), classData.section]
       .filter(Boolean).join(' — ') || 'Klase';
     $('clsSub').textContent = [classData.schoolName, classData.schoolYear].filter(Boolean).join(' · ');
@@ -340,7 +368,10 @@ $('dateSel').addEventListener('change', ()=>{
   render();
 });
 
-const MARKS = [['', 'P', 'p'], ['A', 'A', 'a'], ['L', 'L', 'l'], ['M', 'M', 'm']];
+/* Dating M (Modular) ay E (Excused) na — tugma sa salita ng handbook.
+   Ang uri ng patunay at ang dahilan ay inilalagay ng adviser sa system;
+   dito, markahan lang kung excused — mabilis para sa araw-araw. */
+const MARKS = [['', 'P', 'p'], ['A', 'A', 'a'], ['L', 'L', 'l'], ['E', 'E', 'm']];
 
 function render(){
   const key = $('dateSel').value;
@@ -348,16 +379,20 @@ function render(){
   const holidays = classData.holidays || [];
   const list = $('list');
 
+  const dayMarks = working[key] || {};
+  const anyExcused = Object.values(dayMarks).includes('E');
   $('dayNotice').innerHTML = holidays.includes(key)
     ? '<div class="notice">Nakatala ang araw na ito bilang <strong>No Class</strong>. '
-      + 'Hindi na kailangang mag-encode.</div>' : '';
+      + 'Hindi na kailangang mag-encode.</div>'
+    : (anyExcused
+      ? '<div class="notice hint">Para sa may <strong>E</strong>: piliin ang patunay at isulat ang dahilan '
+        + 'sa asul na kahon sa ilalim ng pangalan. Nakikita agad ito ng adviser.</div>' : '');
 
   if(!key || roster.length === 0){
     list.innerHTML = '<div class="empty"><div class="em">&#128203;</div><p>Walang listahan.</p></div>';
     return;
   }
 
-  const dayMarks = working[key] || {};
   const groups = [['Male', roster.filter(r=>r.sex === 'MALE')], ['Female', roster.filter(r=>r.sex !== 'MALE')]];
   let html = '', shown = 0;
 
@@ -374,13 +409,48 @@ function render(){
       const cur = dayMarks[r.id] || '';
       const btns = MARKS.map(([val, ch, cls])=>
         `<button data-sid="${r.id}" data-val="${val}" class="${cur === val ? 'on ' + cls : ''}">${ch}</button>`).join('');
-      html += `<div class="row"><span class="no">${i+1}</span>
+      const isEx = cur === 'E';
+      html += `<div class="row${isEx ? ' hasex' : ''}"><span class="no">${i+1}</span>
         <span class="nm">${r.name}</span><span class="seg">${btns}</span></div>`;
+
+      /* Kapag Excused, lumalabas agad ang kahon ng patunay at dahilan —
+         nandoon ang sulat sa klase, kaya mas mabilis na siya ang maglagay. */
+      if(isEx){
+        const ex = (workingEx[key] && workingEx[key][r.id]) || { proof:'none', reason:'' };
+        const p = PROOFS.find(x=>x.k === ex.proof) || PROOFS[PROOFS.length-1];
+        html += `<div class="exrow">
+          <div class="lab">Patunay</div>
+          <select data-exproof="${r.id}">
+            ${PROOFS.map(o=>`<option value="${o.k}" ${o.k === ex.proof ? 'selected' : ''}>${o.label}</option>`).join('')}
+          </select>
+          <div class="warn" style="color:${p.valid ? 'var(--ok)' : 'var(--danger)'};">
+            ${p.valid ? 'Sapat ito bilang dokumento.' : 'Kailangan pa rin ng sulat na pirmado ng magulang.'}
+          </div>
+          <div class="lab" style="margin-top:7px;">Dahilan</div>
+          <input type="text" data-exreason="${r.id}" value="${(ex.reason || '').replace(/"/g,'&quot;')}"
+            placeholder="Hal.: lagnat, pagpunta sa ospital">
+        </div>`;
+      }
     });
   });
 
   list.innerHTML = shown ? html
     : '<div class="empty"><div class="em">&#128203;</div><p>Walang learner sa petsang ito.</p></div>';
+
+  const setEx = (sid, patch)=>{
+    if(!workingEx[key]) workingEx[key] = {};
+    workingEx[key][sid] = Object.assign({ proof:'none', reason:'' }, workingEx[key][sid], patch);
+    dirty = true; updateSave(); scheduleAutosave();
+  };
+  list.querySelectorAll('[data-exproof]').forEach(sel=>{
+    sel.addEventListener('change', ()=>{
+      setEx(sel.dataset.exproof, { proof: sel.value });
+      render();
+    });
+  });
+  list.querySelectorAll('[data-exreason]').forEach(inp=>{
+    inp.addEventListener('input', ()=> setEx(inp.dataset.exreason, { reason: inp.value }));
+  });
 
   list.querySelectorAll('[data-sid]').forEach(b=>{
     b.addEventListener('click', ()=>{
@@ -400,11 +470,15 @@ function render(){
 function updateCounts(key){
   const roster = classData.roster || [];
   const dm = working[key] || {};
-  let a = 0, l = 0;
-  roster.forEach(r=>{ const v = dm[r.id]; if(v === 'A') a++; else if(v === 'L') l++; });
+  let a = 0, l = 0, e = 0;
+  roster.forEach(r=>{
+    const v = dm[r.id];
+    if(v === 'A') a++; else if(v === 'L') l++; else if(v === 'E') e++;
+  });
   $('cA').textContent = a;
   $('cL').textContent = l;
-  $('cP').textContent = Math.max(0, roster.length - a - l);
+  $('cE').textContent = e;
+  $('cP').textContent = Math.max(0, roster.length - a - l - e);
 }
 
 function updateSave(){
@@ -438,6 +512,7 @@ async function doSave(isAuto){
     log.push({ date: key, by: auth.currentUser.email, count: count, at: Date.now() });
     await classRef.update({
       marks: working,
+      excuses: workingEx,
       log: log,
       updatedAt: Date.now(),
       updatedBy: 'secretary'
